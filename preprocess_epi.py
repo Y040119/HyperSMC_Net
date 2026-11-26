@@ -1,4 +1,3 @@
-from importlib import resources
 import itertools
 import os
 import anndata
@@ -14,20 +13,56 @@ from sklearn.mixture import GaussianMixture
 from tqdm import tqdm
 from ot import cot_combine_sparse
 
+DEFAULT_DB_ROOT = '/root/autodl-tmp/database'
+
+
+def _resolve_db_file(is_human, filename, db_path=None):
+    if db_path is not None:
+        return db_path
+    species_dir = 'human' if is_human else 'mouse'
+    primary_path = os.path.join(DEFAULT_DB_ROOT, species_dir, filename)
+    if os.path.exists(primary_path):
+        return primary_path
+    local_fallback = os.path.join('database', species_dir, filename)
+    if os.path.exists(local_fallback):
+        return local_fallback
+    raise FileNotFoundError(
+        f"Database file '{filename}' not found at '{primary_path}' or '{local_fallback}'. "
+        f"Please pass 'db_path' explicitly."
+    )
+
+
+def load_lr_df(is_human=True, db_path=None):
+    target_path = _resolve_db_file(is_human, 'lrpairs.tsv', db_path=db_path)
+    lr_list = pd.read_csv(target_path, sep='\t')
+    if 'species' in lr_list.columns:
+        species = 'Human' if is_human else 'Mouse'
+        lr_list = lr_list[lr_list['species'] == species]
+    return lr_list
+
+
+def load_pathway_df(is_human=True, db_path=None):
+    target_path = _resolve_db_file(is_human, 'pathway.tsv', db_path=db_path)
+    pw_list = pd.read_csv(target_path, sep='\t')
+    if 'species' in pw_list.columns:
+        species = 'Human' if is_human else 'Mouse'
+        pw_list = pw_list[pw_list['species'] == species]
+    return pw_list
+
 
 def load_human_hippocampus(data_dir):
     rna_mtx_path = os.path.join(data_dir, 'Human.mtx')
     adata_rna = sc.read_mtx(rna_mtx_path).T
-    genes = pd.read_csv(os.path.join(data_dir, 'genes.tsv'), header=None, sep='	')[0].values
-    barcodes_rna = pd.read_csv(os.path.join(data_dir, 'gene_barcodes.tsv'), header=None, sep='	')[0].values
+    genes = pd.read_csv(os.path.join(data_dir, 'genes.tsv'), header=None, sep='\t')[0].values
+    barcodes_rna = pd.read_csv(os.path.join(data_dir, 'gene_barcodes.tsv'), header=None, sep='\t')[0].values
     adata_rna.var_names = genes
     adata_rna.obs_names = barcodes_rna
     adata_rna.var_names_make_unique()
 
     atac_mtx_path = os.path.join(data_dir, 'Human_atac.mtx')
     adata_atac = sc.read_mtx(atac_mtx_path).T
-    peaks = pd.read_csv(os.path.join(data_dir, 'peaks.tsv'), header=None, sep='	')[0].values
-    barcodes_atac = pd.read_csv(os.path.join(data_dir, 'atac_barcodes.tsv'), header=None, sep='	')[0].values
+    peaks = pd.read_csv(os.path.join(data_dir, 'peaks.tsv'), header=None, sep='\t')[0].values
+    barcodes_atac = pd.read_csv(os.path.join(data_dir, 'atac_barcodes.tsv'), header=None, sep='\t')[0].values
     adata_atac.var_names = peaks
     adata_atac.obs_names = barcodes_atac
 
@@ -59,7 +94,7 @@ def build_gene_activity_matrix(adata_atac, gtf_path, promoter_upstream=5000, pro
         for line in f:
             if line.startswith('#'):
                 continue
-            parts = line.strip().split('	')
+            parts = line.strip().split('\t')
             if parts[2] != 'gene':
                 continue
 
@@ -189,8 +224,8 @@ def idata_construct(score, direction, pairs_meta, lr_df, lr_raw, pathway_df, ada
     return idata
 
 
-def subset_lr(is_human):
-    lr_raw = load_lr_df(is_human).drop_duplicates(subset=['ligand', 'receptor'], keep="last")
+def subset_lr(is_human=True, db_path=None):
+    lr_raw = load_lr_df(is_human=is_human, db_path=db_path).drop_duplicates(subset=['ligand', 'receptor'], keep="last")
     lr_raw['score'] = 1
     return lr_raw
 
@@ -456,28 +491,6 @@ def meta(adata, cluster_key, pairs):
     pairs_meta[['row', 'col']] = avg_pair_pos
     pairs_meta['dist'] = np.linalg.norm(A_pos - B_pos, axis=1)
     return pairs_meta
-
-
-def load_lr_df(is_human, db_path=None):
-    if db_path is not None:
-        lr_list = pd.read_csv(db_path, sep='	')
-    else:
-        with resources.path("spider.lrdb", "lrpairs.tsv") as pw_fn:
-            lr_list = pd.read_csv(pw_fn, sep='	', index_col=0)
-
-    species = 'Human' if is_human else 'Mouse'
-    return lr_list[lr_list.species == species]
-
-
-def load_pathway_df(is_human, db_path=None):
-    if db_path is not None:
-        pw_list = pd.read_csv(db_path, sep='	')
-    else:
-        with resources.path("spider.lrdb", "pathways.tsv") as pw_fn:
-            pw_list = pd.read_csv(pw_fn, sep='	', index_col=0)
-
-    species = 'Human' if is_human else 'Mouse'
-    return pw_list[pw_list.species == species]
 
 
 def subset_pathway_df(pathways, lr_df, adata):
